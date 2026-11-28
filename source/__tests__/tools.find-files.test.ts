@@ -261,3 +261,54 @@ it("rejects a non-boolean relative_paths before selecting a backend", async () =
   });
   expect(platform).not.toHaveBeenCalled();
 });
+
+it.each([null, "true", 1, {}])("rejects non-boolean ignore_case %s before selecting a backend", async (ignore_case) => {
+  vi.mocked(platform).mockClear();
+  expect(await findFilesTool.execute({ pattern: "*.ts", path: directory, ignore_case })).toEqual({
+    output: "ignore_case must be a boolean",
+    isError: true,
+  });
+  expect(platform).not.toHaveBeenCalled();
+  expect(execFile).not.toHaveBeenCalled();
+});
+
+for (const backend of ["native", "fallback"] as const) {
+  describe.skipIf(backend === "native" && !nativeAvailable)(`find_files ignore_case (${backend})`, () => {
+    beforeEach(() => {
+      vi.mocked(platform).mockReturnValue(backend === "native" ? "darwin" : "win32");
+    });
+
+    it("matches case-insensitively when ignore_case is true and case-sensitively when false, including direct file roots", async () => {
+      const lower = await file("src/lower.ts");
+      const upper = await file("src/UPPER.TS");
+
+      const insensitive = await findFilesTool.execute({ pattern: "*.ts", path: directory, ignore_case: true });
+      expect(insensitive.isError).toBe(false);
+      expect(insensitive.output.split("\n").sort()).toEqual([upper, lower].sort());
+
+      const sensitive = await findFilesTool.execute({ pattern: "*.ts", path: directory, ignore_case: false });
+      expect(sensitive.isError).toBe(false);
+      expect(sensitive.output).toBe(lower);
+
+      // Direct file root
+      expect(await findFilesTool.execute({ pattern: "*.ts", path: upper, ignore_case: true })).toEqual({
+        output: upper,
+        isError: false,
+      });
+      expect(await findFilesTool.execute({ pattern: "*.ts", path: upper, ignore_case: false })).toEqual({
+        output: "No files found.",
+        isError: false,
+      });
+    });
+
+    it("retains default case behavior when ignore_case is omitted", async () => {
+      const lower = await file("src/lower.ts");
+      const upper = await file("src/UPPER.TS");
+      const omitted = await findFilesTool.execute({ pattern: "*.ts", path: directory });
+      expect(omitted.isError).toBe(false);
+      expect(omitted.output.split("\n").sort()).toEqual(
+        backend === "native" ? [lower] : [upper, lower].sort(),
+      );
+    });
+  });
+}

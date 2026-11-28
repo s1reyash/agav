@@ -8,12 +8,12 @@ const SKIP_DIRS = new Set(["node_modules", ".git", "build", "dist", ".next", ".v
 const DEFAULT_MAX_RESULTS = 200;
 
 /** Convert a simple glob pattern like "*.tsx" or "config*" to a RegExp. */
-function globToRegex(glob: string): RegExp {
+function globToRegex(glob: string, ignoreCase = true): RegExp {
   const escaped = glob
     .replace(/[.+^${}()|[\]\\]/g, "\\$&")
     .replace(/\*/g, ".*")
     .replace(/\?/g, ".");
-  return new RegExp(`^${escaped}$`, "i");
+  return new RegExp(`^${escaped}$`, ignoreCase ? "i" : "");
 }
 
 /** Pure Node.js recursive find implementation for platforms without find. */
@@ -48,7 +48,7 @@ async function nodeFind(searchPath: string, pattern: RegExp, limit: number): Pro
 }
 
 /** Run native find and return output. Rejects if find is not found or not Unix find. */
-function nativeFind(pattern: string, searchPath: string): Promise<{ stdout: string; stderr: string; maxBufferExceeded?: boolean }> {
+function nativeFind(pattern: string, searchPath: string, ignoreCase = false): Promise<{ stdout: string; stderr: string; maxBufferExceeded?: boolean }> {
   // -path uses glob matching on both BSD and GNU find. Exempt only the
   // literal starting root, even when it is itself an excluded directory.
   const rootPattern = searchPath.replace(/[\[\]*?\\]/g, (char) => "\\" + char);
@@ -58,7 +58,7 @@ function nativeFind(pattern: string, searchPath: string): Promise<{ stdout: stri
     searchPath,
     "(", "-type", "d", "!", "-path", rootPattern,
     "(", ...excludedNames, ")", "-prune", ")",
-    "-o", "(", "-type", "f", "-name", pattern, "-print", ")",
+    "-o", "(", "-type", "f", ignoreCase ? "-iname" : "-name", pattern, "-print", ")",
   ];
 
   return new Promise((resolve, reject) => {
@@ -101,6 +101,10 @@ export const findFilesTool: ToolDefinition = {
           type: "boolean",
           description: "Show paths relative to the search directory; a matching file used as the root is shown by its name",
         },
+        ignore_case: {
+          type: "boolean",
+          description: "Ignore case when matching file names (default: false on Unix native find, true on fallback)",
+        },
         max_results: {
           type: "integer",
           minimum: 1,
@@ -115,6 +119,10 @@ export const findFilesTool: ToolDefinition = {
     const relativePaths = input.relative_paths;
     if (relativePaths !== undefined && typeof relativePaths !== "boolean") {
       return { output: "relative_paths must be a boolean", isError: true };
+    }
+    const ignoreCase = input.ignore_case;
+    if (ignoreCase !== undefined && typeof ignoreCase !== "boolean") {
+      return { output: "ignore_case must be a boolean", isError: true };
     }
     const requestedLimit = input.max_results;
     if (requestedLimit !== undefined && (
@@ -133,7 +141,7 @@ export const findFilesTool: ToolDefinition = {
     // On Unix, try native find first for speed, fall back to Node.js if not found.
     if (platform() !== "win32") {
       try {
-        const result = await nativeFind(pattern, searchPath);
+        const result = await nativeFind(pattern, searchPath, ignoreCase === true);
         if (result.stdout) {
           const lines = result.stdout.split("\n").filter(Boolean);
           if (requestedLimit !== undefined && result.stderr) {
@@ -163,7 +171,7 @@ export const findFilesTool: ToolDefinition = {
 
     // Node.js fallback (always used on Windows)
     try {
-      const regex = globToRegex(pattern);
+      const regex = globToRegex(pattern, ignoreCase ?? true);
       const results = await nodeFind(searchPath, regex, limit);
       if (results.length === 0 && regex.test(basename(searchPath))) {
         const info = await lstat(searchPath).catch(() => undefined);
