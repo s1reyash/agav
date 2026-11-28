@@ -638,4 +638,54 @@ describe("commands/model", () => {
 
     expect(messageText(result)).toContain("No providers reachable");
   });
+
+  it("shows on-disk size for Ollama models with valid size and preserves selection and copy IDs", async () => {
+    const fetchMock = vi.fn(async (input: any) => {
+      if (String(input).includes("/api/tags")) {
+        return {
+          ok: true,
+          json: async () => ({
+            models: [
+              { name: "qwen2.5:7b", size: 5046586573 },
+              { name: "llama3.2:latest" },
+              { name: "bad-zero:1b", size: 0 },
+              { name: "bad-str:1b", size: "4.7GB" },
+            ],
+          }),
+        } as any;
+      }
+      throw new Error("unreachable");
+    });
+    globalThis.fetch = fetchMock as any;
+
+    const context = createContext({ provider: "ollama", model: "llama3.2:latest" });
+    const stdin = Object.assign(new EventEmitter(), {
+      isRaw: false, setRawMode: vi.fn(), resume: vi.fn(), pause: vi.fn(),
+    });
+    const writes: string[] = [];
+    const stdout = { rows: 24, columns: 100, write: vi.fn((chunk: string) => { writes.push(chunk); }) };
+    vi.spyOn(process, "stdin", "get").mockReturnValue(stdin as unknown as typeof process.stdin);
+    vi.spyOn(process, "stdout", "get").mockReturnValue(stdout as unknown as typeof process.stdout);
+
+    const pending = modelCommand.execute("", context);
+    await vi.waitFor(() => expect(stdin.listenerCount("data")).toBe(1));
+
+    const rendered = writes.join("");
+    expect(rendered).toContain("qwen2.5:7b (4.7 GiB)");
+    expect(rendered).toContain("llama3.2:latest");
+    expect(rendered).not.toContain("bad-zero:1b (");
+    expect(rendered).not.toContain("bad-str:1b (");
+    // Single /api/tags request reused
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // Filter to qwen2.5, copy its ID with Ctrl+Y, then select it with Enter.
+    for (const ch of "qwen") stdin.emit("data", Buffer.from(ch));
+    stdin.emit("data", Buffer.from("\x19"));
+    expect(writeClipboard).toHaveBeenCalledWith(expect.anything(), "qwen2.5:7b", expect.any(Function));
+
+    stdin.emit("data", Buffer.from("\r"));
+    const result = await pending;
+    expect(context.setModel).toHaveBeenCalledWith("qwen2.5:7b");
+    expect(messageText(result)).toBe("Model changed to: qwen2.5:7b");
+  });
 });

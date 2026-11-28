@@ -14,6 +14,8 @@ export interface FetchedModel {
   provider: string;
   /** Real context window reported by the provider's model listing, when available. */
   contextWindow?: number;
+  /** On-disk size in bytes reported by local model catalogs (e.g. Ollama), when available. */
+  sizeBytes?: number;
 }
 
 async function fetchAnthropicModels(apiKey: string): Promise<FetchedModel[]> {
@@ -147,9 +149,13 @@ async function fetchOllamaModels(baseUrl: string): Promise<FetchedModel[]> {
       signal: AbortSignal.timeout(3000),
     });
     if (!res.ok) return [];
-    const data = (await res.json()) as { models?: { name: string }[] };
+    const data = (await res.json()) as { models?: { name: string; size?: unknown }[] };
     return (data.models ?? [])
-      .map((m) => ({ id: m.name, provider: "ollama" }))
+      .map((m) => ({
+        id: m.name,
+        provider: "ollama",
+        sizeBytes: typeof m.size === "number" && Number.isFinite(m.size) && m.size > 0 ? m.size : undefined,
+      }))
       .sort((a, b) => a.id.localeCompare(b.id));
   } catch {
     return [];
@@ -317,16 +323,29 @@ function pickModel(
     firstModelRow = lines.length;
     visibleModels = filtered.slice(scrollStart, scrollEnd);
 
+/** Format an on-disk model size in bytes using compact IEC units (e.g. "4.7 GiB"). */
+function formatModelSize(bytes: number): string {
+  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+  let value = bytes;
+  let unitIdx = 0;
+  while (value >= 1024 && unitIdx < units.length - 1) {
+    value /= 1024;
+    unitIdx++;
+  }
+  return unitIdx === 0 ? `${Math.round(value)} B` : `${value.toFixed(1)} ${units[unitIdx]}`;
+}
+
     for (let i = scrollStart; i < scrollEnd; i++) {
       const m = filtered[i]!;
       const isSel = i === selected;
       const active = m.id === currentModel ? " ◀" : "";
       const providerTag = m.provider !== currentProvider ? ` [${m.provider}]` : "";
       const contextTag = m.contextWindow ? ` (${formatContextWindow(m.contextWindow)} ctx)` : "";
+      const sizeTag = m.sizeBytes ? ` (${formatModelSize(m.sizeBytes)})` : "";
 
       lines.push(isSel
-        ? `\x1b[46;30m  ❯ ${m.id}${contextTag}${providerTag}${active} \x1b[0m`
-        : `\x1b[2m    ${m.id}${contextTag}${providerTag}${active}\x1b[0m`);
+        ? `\x1b[46;30m  ❯ ${m.id}${contextTag}${sizeTag}${providerTag}${active} \x1b[0m`
+        : `\x1b[2m    ${m.id}${contextTag}${sizeTag}${providerTag}${active}\x1b[0m`);
     }
 
     for (let i = scrollEnd - scrollStart; i < pageSize; i++) {
