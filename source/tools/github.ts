@@ -60,12 +60,30 @@ export const githubTool: ToolDefinition = {
           type: "number",
           description: "PR or issue number (required for view and comment operations).",
         },
+        state: {
+          type: "string",
+          enum: ["open", "closed", "merged", "all"],
+          description: "Filter state for list_prs (open, closed, merged, all) and list_issues (open, closed, all). Defaults to open.",
+        },
       },
       required: ["operation"],
     },
   },
 
   async execute(input: Record<string, unknown>): Promise<ToolResult> {
+    const op = String(input.operation ?? "");
+    const state = input.state;
+    if (state !== undefined) {
+      if (op !== "list_prs" && op !== "list_issues") {
+        return { output: `state filter is only supported for list_prs and list_issues, not ${op}.`, isError: true };
+      }
+      const allowedStates = op === "list_prs"
+        ? ["open", "closed", "merged", "all"]
+        : ["open", "closed", "all"];
+      if (typeof state !== "string" || !allowedStates.includes(state)) {
+        return { output: `Invalid state for ${op}: expected ${allowedStates.join(", ")}.`, isError: true };
+      }
+    }
     const repo = input.repo;
     const repoMatch = typeof repo === "string"
       ? /^(?:([a-z0-9]+(?:[.-][a-z0-9]+)*)\/)?[a-z0-9]+(?:-[a-z0-9]+)*\/(?!\.{1,2}$)[a-z0-9_.-]+$/i.exec(repo)
@@ -77,7 +95,6 @@ export const githubTool: ToolDefinition = {
     const authErr = await checkGh(repoMatch?.[1]);
     if (authErr) return { output: authErr, isError: true };
 
-    const op = String(input.operation ?? "");
     const title = String(input.title ?? "");
     const body = String(input.body ?? "");
     const base = String(input.base ?? "");
@@ -107,9 +124,11 @@ export const githubTool: ToolDefinition = {
       }
 
       case "list_prs": {
-        const result = await runInRepo(["pr", "list"]);
+        const args = typeof state === "string" ? ["pr", "list", "--state", state] : ["pr", "list"];
+        const emptyMsg = state === "all" ? "No PRs found." : `No ${typeof state === "string" ? state : "open"} PRs.`;
+        const result = await runInRepo(args);
         return {
-          output: result.stdout || result.stderr || "No open PRs.",
+          output: result.stdout || result.stderr || emptyMsg,
           isError: result.exitCode !== 0,
         };
       }
@@ -135,9 +154,11 @@ export const githubTool: ToolDefinition = {
       }
 
       case "list_issues": {
-        const result = await runInRepo(["issue", "list"]);
+        const args = typeof state === "string" ? ["issue", "list", "--state", state] : ["issue", "list"];
+        const emptyMsg = state === "all" ? "No issues found." : `No ${typeof state === "string" ? state : "open"} issues.`;
+        const result = await runInRepo(args);
         return {
-          output: result.stdout || result.stderr || "No open issues.",
+          output: result.stdout || result.stderr || emptyMsg,
           isError: result.exitCode !== 0,
         };
       }

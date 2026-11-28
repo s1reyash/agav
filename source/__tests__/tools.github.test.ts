@@ -108,3 +108,42 @@ it.each(["view_pr", "view_issue"])("rejects invalid issue and PR numbers for %s"
     expect(ghCalls()).toEqual([["auth", "status"]]);
   }
 });
+
+describe("GitHub list state filtering", () => {
+  beforeEach(() => {
+    vi.mocked(execFile).mockReset();
+    vi.mocked(execFile).mockImplementation((...args: unknown[]) => {
+      (args.at(-1) as (error: null, stdout: string, stderr: string) => void)(null, "", "");
+      return {} as ReturnType<typeof execFile>;
+    });
+  });
+
+  it.each([
+    ["list_prs", "open", "No open PRs."],
+    ["list_prs", "closed", "No closed PRs."],
+    ["list_prs", "merged", "No merged PRs."],
+    ["list_prs", "all", "No PRs found."],
+    ["list_issues", "open", "No open issues."],
+    ["list_issues", "closed", "No closed issues."],
+    ["list_issues", "all", "No issues found."],
+  ])("passes --state %s for %s with explicit repo and accurate empty message", async (operation, state, emptyMsg) => {
+    const res = await githubTool.execute({ operation, state, repo: "owner/repo" });
+    expect(res).toEqual({ output: emptyMsg, isError: false });
+    const cmd = operation === "list_prs" ? "pr" : "issue";
+    expect(ghCalls()).toEqual([
+      ["auth", "status"],
+      [cmd, "list", "--state", state, "--repo", "owner/repo"],
+    ]);
+  });
+
+  it.each([
+    { operation: "list_issues", state: "merged" },
+    { operation: "list_prs", state: "draft" },
+    { operation: "list_prs", state: 123 },
+    { operation: "view_pr", state: "open", number: 1 },
+  ])("rejects unsupported state combination %j before invoking gh", async (input) => {
+    const res = await githubTool.execute(input);
+    expect(res.isError).toBe(true);
+    expect(execFile).not.toHaveBeenCalled();
+  });
+});
